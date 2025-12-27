@@ -18,7 +18,6 @@ contextBridge.exposeInMainWorld('settingsAPI', {
     quitApp: () => ipcRenderer.invoke('quit-app'),
     newConversation: () => ipcRenderer.invoke('new-conversation'),
     
-    // Window control
     closeSettings: () => ipcRenderer.send('close-settings'),
     
     // External links
