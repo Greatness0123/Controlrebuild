@@ -31,32 +31,57 @@ jobs:
     
     - name: Download Python artifacts
       uses: actions/download-artifact@v4
+      continue-on-error: true
       with:
+        # maps matrix.os to python-linux / python-windows / python-macos
         name: python-${{ matrix.os == 'ubuntu-latest' && 'linux' || matrix.os == 'windows-latest' && 'windows' || 'macos' }}
         path: python-artifacts
-    
+
     - name: Install dependencies
       run: npm ci
     
     - name: Prepare Python executables for ${{ matrix.os }}
+      # force bash so the same POSIX script runs on windows/mac/linux
+      shell: bash
       run: |
+        echo "Checking for python-artifacts in: $(pwd)/python-artifacts"
         mkdir -p assets/binaries
-        if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-          cp python-artifacts/dist/backend_modified assets/binaries/
-          cp python-artifacts/AppImage/wakeword_helper.AppImage assets/binaries/
-          chmod +x assets/binaries/*
-        elif [ "${{ matrix.os }}" = "windows-latest" ]; then
-          cp python-artifacts/dist/backend_modified.exe assets/binaries/
-          cp python-artifacts/assets/wakeword/dist/wakeword_helper.exe assets/binaries/
-        elif [ "${{ matrix.os }}" = "macos-latest" ]; then
-          # Mount and extract DMGs
-          hdiutil attach python-artifacts/backend_modified.dmg
-          cp -r "/Volumes/Backend Modified/backend_modified.app" assets/binaries/
-          hdiutil attach python-artifacts/wakeword_helper.dmg  
-          cp "/Volumes/Wakeword Helper/wakeword_helper" assets/binaries/
-          hdiutil detach "/Volumes/Backend Modified"
-          hdiutil detach "/Volumes/Wakeword Helper"
-          chmod +x assets/binaries/*
+
+        if [ ! -d "python-artifacts" ] || [ -z "$(ls -A python-artifacts 2>/dev/null)" ]; then
+          echo "WARNING: python-artifacts directory is missing or empty."
+          echo "If you expect python artifacts to be downloaded, make sure they were uploaded using actions/upload-artifact with the name:"
+          echo "  python-${{ matrix.os == 'ubuntu-latest' && 'linux' || matrix.os == 'windows-latest' && 'windows' || 'macos' }}"
+          echo ""
+          echo "Proceeding without python binaries. If these are required for your build, this will likely fail later."
+        else
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            [ -f python-artifacts/dist/backend_modified ] && cp python-artifacts/dist/backend_modified assets/binaries/ || echo "backend_modified not found for linux"
+            [ -f python-artifacts/AppImage/wakeword_helper.AppImage ] && cp python-artifacts/AppImage/wakeword_helper.AppImage assets/binaries/ || echo "wakeword_helper.AppImage not found for linux"
+            chmod +x assets/binaries/* || true
+          elif [ "${{ matrix.os }}" = "windows-latest" ]; then
+            # on windows runner bash is available; executables typically have .exe
+            [ -f python-artifacts/dist/backend_modified.exe ] && cp python-artifacts/dist/backend_modified.exe assets/binaries/ || echo "backend_modified.exe not found for windows"
+            [ -f python-artifacts/assets/wakeword/dist/wakeword_helper.exe ] && cp python-artifacts/assets/wakeword/dist/wakeword_helper.exe assets/binaries/ || echo "wakeword_helper.exe not found for windows"
+          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
+            # Ensure expected DMG files exist before attempting to attach
+            if [ -f python-artifacts/backend_modified.dmg ]; then
+              hdiutil attach python-artifacts/backend_modified.dmg
+              cp -r "/Volumes/Backend Modified/backend_modified.app" assets/binaries/ || echo "backend_modified.app not found in DMG"
+              hdiutil detach "/Volumes/Backend Modified" || true
+            else
+              echo "backend_modified.dmg not found for macos"
+            fi
+
+            if [ -f python-artifacts/wakeword_helper.dmg ]; then
+              hdiutil attach python-artifacts/wakeword_helper.dmg
+              cp "/Volumes/Wakeword Helper/wakeword_helper" assets/binaries/ || echo "wakeword_helper not found in DMG"
+              hdiutil detach "/Volumes/Wakeword Helper" || true
+            else
+              echo "wakeword_helper.dmg not found for macos"
+            fi
+
+            chmod +x assets/binaries/* || true
+          fi
         fi
     
     - name: Build for ${{ matrix.os }}
@@ -76,7 +101,7 @@ jobs:
         elif [ "${{ matrix.os }}" = "macos-latest" ]; then
           tar -czf dist-packaged/Control-mac-x64.tar.gz -C dist .
         fi
-    
+
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
@@ -105,5 +130,3 @@ jobs:
         prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-        # lets see if this works
