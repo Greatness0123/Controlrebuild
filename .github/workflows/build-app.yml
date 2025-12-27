@@ -15,151 +15,158 @@ on:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
 
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v4
+    # ----------------------------------------------------
+    # Checkout
+    # ----------------------------------------------------
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v3
+    # ----------------------------------------------------
+    # Node.js (Firebase + tooling)
+    # ----------------------------------------------------
+    - name: Setup Node.js 20
+      uses: actions/setup-node@v4
       with:
-        node-version: '18'
-        cache: 'npm'
+        node-version: 20
+        cache: npm
 
-    - name: Setup Python (for node-gyp)
-      uses: actions/setup-python@v4
+    # ----------------------------------------------------
+    # Python (node-gyp)
+    # ----------------------------------------------------
+    - name: Setup Python
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.x'
+        python-version: '3.11'
 
-    - name: Install OS build tools (ubuntu only)
+    # ----------------------------------------------------
+    # Linux native build dependencies
+    # ----------------------------------------------------
+    - name: Install Linux build tools
       if: matrix.os == 'ubuntu-latest'
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential pkg-config libffi-dev
+        sudo apt-get install -y \
+          build-essential \
+          pkg-config \
+          libffi-dev
 
-    - name: Install Visual Studio Build Tools (windows only)
-      if: matrix.os == 'windows-latest'
+    # ----------------------------------------------------
+    # Install dependencies (STRICT, deterministic)
+    # ----------------------------------------------------
+    - name: Install npm dependencies
+      run: npm ci
+
+    # ----------------------------------------------------
+    # Rebuild native modules FOR ELECTRON (CRITICAL)
+    # ----------------------------------------------------
+    - name: Rebuild native modules for Electron
       run: |
-        choco install -y visualstudio2019buildtools --ignore-checksums || echo "VS Build Tools should already be available on windows runner"
-
-    - name: Cache node_modules (optional)
-      uses: actions/cache@v4
-      with:
-        path: ~/.npm
-        key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-        restore-keys: |
-          ${{ runner.os }}-node-
-
-    - name: Install dependencies (clean)
-      run: |
-        npm ci
-
-    # Temporarily upgrade native dependencies in the CI environment to build against Node 18
-    - name: Upgrade native deps for CI build (ffi-napi etc.)
-      run: |
-        # Install latest native modules into node_modules without changing package.json
-        # This keeps your lockfile intact while allowing CI to build with the newer native modules.
-        npm install --no-save ffi-napi@latest node-addon-api@latest get-uv-event-loop-napi-h@latest || true
+        npx electron-rebuild -f
       env:
-        CI: true
+        npm_config_build_from_source: true
 
-    - name: Force build native modules from source
-      run: |
-        # Ensure node-gyp will build from source against the runner headers
-        export npm_config_build_from_source=true
-        # rebuild the ffi module directly if present
-        if [ -d node_modules/ffi-napi ]; then
-          (cd node_modules/ffi-napi && node-gyp rebuild) || true
-        fi
-        # run an electron-rebuild if your project uses Electron (will noop if electron not present)
-        npx electron-rebuild -f -w ffi-napi || true
-      shell: bash
-
-    - name: Prepare Python executables for ${{ matrix.os }}
+    # ----------------------------------------------------
+    # Prepare Python binaries
+    # ----------------------------------------------------
+    - name: Prepare Python executables
       shell: bash
       run: |
-        echo "Checking for python-artifacts in: $(pwd)/python-artifacts"
+        echo "Preparing python binaries..."
         mkdir -p assets/binaries
 
         if [ ! -d "python-artifacts" ] || [ -z "$(ls -A python-artifacts 2>/dev/null)" ]; then
-          echo "WARNING: python-artifacts directory is missing or empty."
-          echo "Proceeding without python binaries. If these are required for your build, this will likely fail later."
-        else
-          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            [ -f python-artifacts/dist/backend_modified ] && cp python-artifacts/dist/backend_modified assets/binaries/ || echo "backend_modified not found for linux"
-            [ -f python-artifacts/AppImage/wakeword_helper.AppImage ] && cp python-artifacts/AppImage/wakeword_helper.AppImage assets/binaries/ || echo "wakeword_helper.AppImage not found for linux"
-            chmod +x assets/binaries/* || true
-          elif [ "${{ matrix.os }}" = "windows-latest" ]; then
-            [ -f python-artifacts/dist/backend_modified.exe ] && cp python-artifacts/dist/backend_modified.exe assets/binaries/ || echo "backend_modified.exe not found for windows"
-            [ -f python-artifacts/assets/wakeword/dist/wakeword_helper.exe ] && cp python-artifacts/assets/wakeword/dist/wakeword_helper.exe assets/binaries/ || echo "wakeword_helper.exe not found for windows"
-          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
-            if [ -f python-artifacts/backend_modified.dmg ]; then
-              hdiutil attach python-artifacts/backend_modified.dmg
-              cp -r "/Volumes/Backend Modified/backend_modified.app" assets/binaries/ || echo "backend_modified.app not found in DMG"
-              hdiutil detach "/Volumes/Backend Modified" || true
-            else
-              echo "backend_modified.dmg not found for macos"
-            fi
-
-            if [ -f python-artifacts/wakeword_helper.dmg ]; then
-              hdiutil attach python-artifacts/wakeword_helper.dmg
-              cp "/Volumes/Wakeword Helper/wakeword_helper" assets/binaries/ || echo "wakeword_helper not found in DMG"
-              hdiutil detach "/Volumes/Wakeword Helper" || true
-            else
-              echo "wakeword_helper.dmg not found for macos"
-            fi
-
-            chmod +x assets/binaries/* || true
-          fi
+          echo "WARNING: python-artifacts directory missing or empty."
+          exit 0
         fi
 
-    - name: Build for ${{ matrix.os }}
-      run: |
-        npm run build
+        if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+          cp python-artifacts/dist/backend_modified assets/binaries/ 2>/dev/null || true
+          cp python-artifacts/AppImage/wakeword_helper.AppImage assets/binaries/ 2>/dev/null || true
+          chmod +x assets/binaries/* || true
+
+        elif [ "${{ matrix.os }}" = "windows-latest" ]; then
+          cp python-artifacts/dist/backend_modified.exe assets/binaries/ 2>/dev/null || true
+          cp python-artifacts/assets/wakeword/dist/wakeword_helper.exe assets/binaries/ 2>/dev/null || true
+
+        elif [ "${{ matrix.os }}" = "macos-latest" ]; then
+          if [ -f python-artifacts/backend_modified.dmg ]; then
+            hdiutil attach python-artifacts/backend_modified.dmg
+            cp -R "/Volumes/Backend Modified/backend_modified.app" assets/binaries/ || true
+            hdiutil detach "/Volumes/Backend Modified" || true
+          fi
+
+          if [ -f python-artifacts/wakeword_helper.dmg ]; then
+            hdiutil attach python-artifacts/wakeword_helper.dmg
+            cp "/Volumes/Wakeword Helper/wakeword_helper" assets/binaries/ || true
+            hdiutil detach "/Volumes/Wakeword Helper" || true
+          fi
+
+          chmod +x assets/binaries/* || true
+        fi
+
+    # ----------------------------------------------------
+    # Build Electron app
+    # ----------------------------------------------------
+    - name: Build Electron app
+      run: npm run build
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        npm_config_build_from_source: true
 
-    - name: Package artifacts
+    # ----------------------------------------------------
+    # Package artifacts
+    # ----------------------------------------------------
+    - name: Package build artifacts
+      shell: bash
       run: |
         mkdir -p dist-packaged
+
         if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
           tar -czf dist-packaged/Control-linux-x64.tar.gz -C dist .
+
         elif [ "${{ matrix.os }}" = "windows-latest" ]; then
           cd dist
           7z a -tzip ../dist-packaged/Control-win-x64.zip *
           cd ..
+
         elif [ "${{ matrix.os }}" = "macos-latest" ]; then
           tar -czf dist-packaged/Control-mac-x64.tar.gz -C dist .
         fi
 
+    # ----------------------------------------------------
+    # Upload artifacts
+    # ----------------------------------------------------
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
         name: Control-${{ matrix.os }}
         path: dist-packaged/*
 
+  # ----------------------------------------------------
+  # Release job (manual/tag only)
+  # ----------------------------------------------------
   release:
     needs: build
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/')
 
     steps:
-    - name: Download all artifacts
+    - name: Download artifacts
       uses: actions/download-artifact@v4
       with:
         path: release-artifacts
 
-    - name: Create Release
+    - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          release-artifacts/Control-ubuntu-latest/*
-          release-artifacts/Control-windows-latest/*
-          release-artifacts/Control-macos-latest/*
+          release-artifacts/**/*
         draft: false
         prerelease: false
       env:

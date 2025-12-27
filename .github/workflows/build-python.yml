@@ -39,7 +39,7 @@ jobs:
         pyinstaller --onefile --console --name wakeword_helper wakeword_helper.py
     
     - name: Upload Windows artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: python-windows
         path: |
@@ -82,7 +82,7 @@ jobs:
         hdiutil create -volname "Wakeword Helper" -srcfolder temp/wakeword -ov -format UDZO wakeword_helper.dmg
     
     - name: Upload macOS artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: python-macos
         path: |
@@ -130,7 +130,7 @@ jobs:
         chmod +x AppImage/wakeword_helper.AppImage
     
     - name: Upload Linux artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: python-linux
         path: |
